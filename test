@@ -1,0 +1,162 @@
+import bpy
+from bpy.types import Panel, Operator, PropertyGroup, FloatProperty, PointerProperty
+from bpy.utils import register_class, unregister_class
+from bpy_extras.io_utils import ImportHelper
+import cv2
+import mediapipe as mp
+
+user_camera = None  # Define user_camera here as None
+
+def setup_camera():
+    bpy.ops.object.camera_add()
+    cam = bpy.context.active_object
+    cam.name = "UserCamera"
+    cam.data.clip_end = 100
+    cam.data.lens = 18
+    bpy.context.scene.camera = cam
+    return cam
+
+
+
+def full_setup():
+    global user_camera
+
+    
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False, confirm=False)
+
+    bpy.ops.object.add(radius=1.0, type='EMPTY')
+    pose = bpy.context.active_object
+    pose.name = "Pose"
+
+    bpy.ops.object.add(radius=1.0, type='EMPTY')
+    body = bpy.context.active_object
+    body.name = "Body"
+    body.parent = pose
+
+    pose = bpy.context.scene.objects["Pose"]
+
+    bpy.ops.object.add(radius=1.0, type='EMPTY')
+    face = bpy.context.active_object
+    face.name = "Face"
+    face.parent = pose
+
+    for k in range(468):
+        bpy.ops.mesh.primitive_cube_add()
+        box = bpy.context.active_object
+        box.name = str(k).zfill(3) + "Face"
+        box.scale = (0.002, 0.002, 0.002)
+        box.parent = face
+
+    face = bpy.context.scene.objects["Face"]
+    
+    user_camera = setup_camera()
+    return face
+
+
+def run_face():
+    global user_camera
+    
+    user_camera = setup_camera()
+    
+    mp_drawing = mp.solutions.drawing_utils
+    mp_pose = mp.solutions.pose
+
+    cap = cv2.VideoCapture(0)
+
+    with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+        while cap.read():
+            success, image = cap.read()
+            if not success:
+                print("Ignoring empty camera frame.")
+                continue
+
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image.flags.writeable = False
+            results = pose.process(image)
+
+            image.flags.writeable = True
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+
+
+
+
+            if results.pose_landmarks:
+                left_eye = results.pose_landmarks.landmark[mp_pose.PoseLandmark.LEFT_EYE]
+                right_eye = results.pose_landmarks.landmark[mp_pose.PoseLandmark.RIGHT_EYE]
+
+                scale = 0.5
+
+                # Calculate the average position of left and right eyes
+                avg_position = [(left_eye.x + right_eye.x) / 2, (left_eye.y + right_eye.y) / 2, (left_eye.z + right_eye.z) / 2]
+
+                # Update the camera location based on the average position
+                user_camera.location.x = (0.5 - avg_position[0]) * scale
+                user_camera.location.y = (avg_position[2] - 0.5) * scale + 0.5
+                user_camera.location.z = (0.5 - avg_position[1]) * scale
+
+                # Simple rotation calculation
+                user_camera.rotation_euler.x = 1.3
+                user_camera.rotation_euler.y = 0
+                user_camera.rotation_euler.z = 0
+
+            mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+
+            image = cv2.flip(image, 1)
+            cv2.imshow('MediaPipe Pose', image)
+            if cv2.waitKey(1) & 0xFF == 27:
+                break
+
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+class RunOperator(bpy.types.Operator):
+    bl_idname = "object.run_body_operator"
+    bl_label = "Run Face Operator"
+
+    def execute(self, context):
+        run_face()
+        return {'FINISHED'}
+
+
+class MediaPipePanel(bpy.types.Panel):
+    bl_label = "MediaPipe v1"
+    bl_category = "MediaPipe"
+    bl_idname = "MediaPipe"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_label = "MediaPipe v1"
+
+    def draw(self, context):
+        layout = self.layout
+        obj = context.object
+        row = layout.row()
+
+        row = layout.row()
+        row.label(text="Run Motion Capture")
+
+        row = layout.row()
+        row.operator(RunOperator.bl_idname, text="Camera")
+
+        row = layout.row()
+        row.label(text="(Press escape to stop)")
+
+
+_classes = [
+    MediaPipePanel,
+    RunOperator,
+]
+
+
+def register():
+    for c in _classes: register_class(c)
+
+def unregister():
+    for c in _classes: unregister_class(c)
+
+if __name__ == "__main__":
+    register()
